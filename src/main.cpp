@@ -53,7 +53,8 @@ WiFiClient wifiClient;
 WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP);
 
-uint32_t blinkTimeout;
+uint32_t blinkLastTs;
+uint32_t wifiLastTs;
 
 String deviceMAC;
 String wifiSSID = "";
@@ -162,7 +163,7 @@ void setup()
   miTagScanner.init();
   beginWifi(wifiSSID, wifiPassword);
 
-  mqttClient.begin("coldsenses.com", 9100, wifiClient);
+  mqttClient.begin(COLDSENSES_MQTT_SERVER_URL, COLDSENSES_MQTT_SERVER_PORT, wifiClient);
 
   // Init LVGL
   lv_init();
@@ -226,6 +227,11 @@ void loop()
 
   prevWifiState = wifiState;
   prevMqttState = mqttState;
+
+  if (wifiState != COLDSENSES_WL_CONNECTED && wifiState != COLDSENSES_WL_WAITING && millis() - wifiLastTs > 30000)
+  {
+    beginWifi(wifiSSID, wifiPassword);
+  }
 
   wl_status_t wifiRawStatus = WiFi.status();
   switch (wifiRawStatus)
@@ -354,7 +360,7 @@ static void debug_tick_task(lv_timer_t *timer)
 
 static void splash_to_home(lv_timer_t *timer)
 {
-  blinkTimeout = millis() + 1000;
+  blinkLastTs = millis();
   tagState = COLDSENSES_TAG_NOT_SCAN;
   spinnerHide = false;
   updateWifiStatusUI();
@@ -481,7 +487,7 @@ static void beginWifi(String &wifiSSID, String &wifiPassword)
   Serial.print("WIFI PW: ");
   Serial.println(wifiPassword);
 #endif
-
+  wifiLastTs = millis();
   WiFi.begin(wifiSSID.c_str(), wifiPassword.length() > 0 ? wifiPassword.c_str() : NULL);
 }
 
@@ -1015,9 +1021,9 @@ void changeInputValueTo(String &value, bool passwordMode, int maxLength)
 
 static void updateStatusBar()
 {
-  if (millis() - 1000 > blinkTimeout)
+  if (millis() - blinkLastTs > 2000)
   {
-    blinkTimeout = millis() + 1000;
+    blinkLastTs = millis();
   }
   updateWifiStatusUI();
   updateBLEStatusUI();
@@ -1040,7 +1046,7 @@ static void updateWifiStatusUI()
   case COLDSENSES_WL_WAITING:
   default:
     lv_obj_toggle_display(ui_WifiOffStatusImage, false);
-    bool isImgHidden = millis() < blinkTimeout;
+    bool isImgHidden = millis() - blinkLastTs < 1000;
     lv_obj_toggle_display(ui_WifiStatusImage, !isImgHidden);
   }
 }
@@ -1057,7 +1063,7 @@ static void updateBLEStatusUI()
     break;
   case COLDSENSES_TAG_WAITING:
   default:
-    bool isImgHidden = millis() < blinkTimeout;
+    bool isImgHidden = millis() - blinkLastTs < 1000;
     lv_obj_toggle_display(ui_BLEStatusImage, !isImgHidden);
   }
 }
@@ -1078,7 +1084,7 @@ static void updateMqttStatusUI()
   case COLDSENSES_MQTT_WAITING:
   default:
     lv_obj_toggle_display(ui_ServerOffStatusImage, false);
-    bool isImgHidden = millis() < blinkTimeout;
+    bool isImgHidden = millis() - blinkLastTs < 1000;
     lv_obj_toggle_display(ui_ServerStatusImage, !isImgHidden);
     break;
   }

@@ -142,7 +142,11 @@ void MiTagScanner::_clearMiTagData()
 
 void MiTagScanner::_parseRawDataTo(std::string &rawData, MiTagData &to)
 {
-  to.rawMacAddress = rawData.substr(0, 6);
+  to.rawMacAddress = "";
+  for (int i = 5; i >= 0; i--)
+  {
+    to.rawMacAddress += rawData[i];
+  }
 
   int tempRaw = rawData[6] + (rawData[7] << 8);
   to.tempC = tempRaw / 100.0;
