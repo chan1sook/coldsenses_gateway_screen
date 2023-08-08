@@ -1368,6 +1368,10 @@ static void updateHomeScreen()
     lv_label_set_text(ui_TagCountLabel, textCountDisplay.c_str());
 
     tagAlarm = isShouldAlarm;
+    if (!isShouldAlarm)
+    {
+      stopAlarmFlag = false;
+    }
   }
 }
 
