@@ -35,6 +35,7 @@ extern lv_obj_t * ui_LoadingLabel;
 // SCREEN: ui_HomeScreen
 void ui_HomeScreen_screen_init(void);
 extern lv_obj_t * ui_HomeScreen;
+void ui_event_TagsHolderPanel(lv_event_t * e);
 extern lv_obj_t * ui_TagsHolderPanel;
 extern lv_obj_t * ui_TagPanelT;
 extern lv_obj_t * ui_TagInnerPanelT;
@@ -49,6 +50,8 @@ extern lv_obj_t * ui_WifiOffStatusImage;
 extern lv_obj_t * ui_BLEStatusImage;
 extern lv_obj_t * ui_ServerStatusImage;
 extern lv_obj_t * ui_ServerOffStatusImage;
+extern lv_obj_t * ui_AlarmStatusImage;
+extern lv_obj_t * ui_AlarmOffStatusImage;
 extern lv_obj_t * ui_TitleLabel;
 void ui_event_ToOptionButton(lv_event_t * e);
 extern lv_obj_t * ui_ToOptionButton;
@@ -106,6 +109,8 @@ LV_IMG_DECLARE(ui_img_wifi_off_png);    // assets\wifi_off.png
 LV_IMG_DECLARE(ui_img_bluetooth_png);    // assets\bluetooth.png
 LV_IMG_DECLARE(ui_img_clouds_png);    // assets\clouds.png
 LV_IMG_DECLARE(ui_img_cloud_slash_png);    // assets\cloud_slash.png
+LV_IMG_DECLARE(ui_img_bell_png);    // assets\bell.png
+LV_IMG_DECLARE(ui_img_bell_slash_png);    // assets\bell_slash.png
 LV_IMG_DECLARE(ui_img_gear_png);    // assets\gear.png
 LV_IMG_DECLARE(ui_img_chevron_right_png);    // assets\chevron_right.png
 LV_IMG_DECLARE(ui_img_asterisk_png);    // assets\asterisk.png

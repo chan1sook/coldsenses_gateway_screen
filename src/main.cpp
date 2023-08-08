@@ -14,6 +14,8 @@
 #include "BLE.h"
 #include "ColdsensesEnums.h"
 
+#define BUZZER_GPIO 33
+
 static const uint16_t screenWidth = 480;
 static const uint16_t screenHeight = 320;
 
@@ -34,6 +36,7 @@ static void touchpad_read(lv_indev_drv_t *drv, lv_indev_data_t *data);
 static void lv_tick_task(void *arg);
 static void lv_handler_task(void *arg);
 static void update_screen_task(lv_timer_t *timer);
+static void mi_scan_task(void *arg);
 #if COLDSENSES_DEBUG_TICK
 static void debug_tick_task(lv_timer_t *timer);
 #endif
@@ -41,42 +44,58 @@ static void splash_to_home(lv_timer_t *timer);
 
 esp_timer_handle_t ticker_timer;
 esp_timer_handle_t handler_timer;
+esp_timer_handle_t miscan_timer;
 const esp_timer_create_args_t ticker_timer_args = {
     .callback = &lv_tick_task,
     .name = "lv_tick_task"};
 const esp_timer_create_args_t handler_timer_args = {
     .callback = &lv_handler_task,
     .name = "lv_handler_task"};
+const esp_timer_create_args_t miscan_timer_args = {
+    .callback = &mi_scan_task,
+    .name = "mi_scan_task"};
 
-MQTTClient mqttClient;
+#define WIFI_DELAY (30000)
+#define BLINK_DELAY (2000)
+#define BUZZER_INTERVAL (1000)
+#define BUZZER_BEEP_DURATION (100)
+
+MQTTClient mqttClient((MAX_TAGS_REMEMBER * 40));
 WiFiClient wifiClient;
 WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP);
 
 uint32_t blinkLastTs;
 uint32_t wifiLastTs;
+uint32_t alarmLastTs;
 
 String deviceMAC;
 String wifiSSID = "";
 double gpsLatitude = 15.8700;
 double gpsLongitude = 100.9925;
 String wifiPassword = "";
+bool buzzerEnable;
 
 String inputTemp;
 String optionWifiSSID;
 String optionWifiPassword;
 double optionGpsLat;
 double optionGpsLng;
+bool optionBuzzerEnable;
 
 String mqttClientName;
 bool isMqttError;
+coldsenses_scan_mode bleScanMode = COLDSENSES_SCANMODE_NOSCAN;
+String gwInfoTopic;
 
 MiTagScanner miTagScanner;
 coldsenses_wifi_state wifiState = COLDSENSES_WL_WAITING;
 coldsenses_wifi_state prevWifiState = COLDSENSES_WL_WAITING;
-coldsenses_tag_state tagState = COLDSENSES_TAG_NOT_SCAN;
+coldsenses_tag_state tagState = COLDSENSES_TAG_WAITING;
 coldsenses_mqtt_state mqttState = COLDSENSES_MQTT_DISCONNECTED;
 coldsenses_mqtt_state prevMqttState = COLDSENSES_MQTT_DISCONNECTED;
+bool stopAlarmFlag = true;
+bool tagAlarm = false;
 
 bool spinnerHide = false;
 coldsenses_after_alarm_action afterAlarmAction = COLDSENSES_NO_ACTION;
@@ -87,6 +106,7 @@ ui_coldsenses_option_holder uiWifiSSIDOptionHolder;
 ui_coldsenses_option_holder uiWifiPasswordOptionHolder;
 ui_coldsenses_option_holder uiGpsLatOptionHolder;
 ui_coldsenses_option_holder uiGpsLngOptionHolder;
+ui_coldsenses_option_holder uiAlarmOptionHolder;
 ui_coldsenses_option_holder uiCheckVersionHolder;
 
 #if COLDSENSES_ALLOW_EEPROM
@@ -100,7 +120,9 @@ static void _displayOptionValues();
 
 static void beginWifi(String &wifiSSID, String &wifiPassword);
 static void beginMqtt();
+static void subscribeMqttTopics();
 static void emitMqtt(MiTagData &tagData);
+static void mqttMessageCallback(String &topic, String &payload);
 
 bool isOptionDirty(coldsenses_input_target target);
 bool isOptionsDirty();
@@ -122,7 +144,11 @@ static void ui_event_wifi_ssid_option(lv_event_t *e);
 static void ui_event_wifi_password_option(lv_event_t *e);
 static void ui_event_gps_lat_option(lv_event_t *e);
 static void ui_event_gps_lng_option(lv_event_t *e);
+static void ui_event_toggle_alarm(lv_event_t *e);
 static void ui_event_check_version_option(lv_event_t *e);
+
+static void stopBuzzer();
+static void alarmBuzzer();
 
 void transitionToHomeScreen();
 void transitionToOptionScreen();
@@ -135,12 +161,14 @@ static void updateStatusBar();
 static void updateWifiStatusUI();
 static void updateBLEStatusUI();
 static void updateMqttStatusUI();
+static void updateAlarmStatusUI();
 static void updateHomeScreen();
 static void updateTagHolderData(MiTagData *tagData, int i);
 static void updateOptionScreen();
 
 void setup()
 {
+  pinMode(BUZZER_GPIO, OUTPUT);
   Serial.begin(115200);
 
   Serial.print("COLDSENSES_GATEWAY V.");
@@ -160,9 +188,13 @@ void setup()
   mqttClientName = "w32s01-gw-";
   mqttClientName += deviceMAC;
 
+  gwInfoTopic = "gwinfo_";
+  gwInfoTopic += deviceMAC;
+
   miTagScanner.init();
   beginWifi(wifiSSID, wifiPassword);
 
+  mqttClient.onMessage(mqttMessageCallback);
   mqttClient.begin(COLDSENSES_MQTT_SERVER_URL, COLDSENSES_MQTT_SERVER_PORT, wifiClient);
 
   // Init LVGL
@@ -210,6 +242,9 @@ void setup()
 
   lv_timer_create(update_screen_task, 100 * portTICK_RATE_MS, NULL);
 
+  ESP_ERROR_CHECK(esp_timer_create(&miscan_timer_args, &miscan_timer));
+  ESP_ERROR_CHECK(esp_timer_start_periodic(miscan_timer, 5000 * portTICK_RATE_MS * 1000));
+
 #if COLDSENSES_DEBUG_TICK
   lv_timer_create(debug_tick_task, 1000 * portTICK_RATE_MS, NULL);
 #endif
@@ -228,7 +263,7 @@ void loop()
   prevWifiState = wifiState;
   prevMqttState = mqttState;
 
-  if (wifiState != COLDSENSES_WL_CONNECTED && wifiState != COLDSENSES_WL_WAITING && millis() - wifiLastTs > 30000)
+  if (wifiState != COLDSENSES_WL_CONNECTED && wifiState != COLDSENSES_WL_WAITING && millis() - wifiLastTs > WIFI_DELAY)
   {
     beginWifi(wifiSSID, wifiPassword);
   }
@@ -264,33 +299,43 @@ void loop()
     mqttState = COLDSENSES_MQTT_WAITING;
   }
 
+  if (wifiState == COLDSENSES_WL_CONNECT_FAILED || wifiState == COLDSENSES_WL_DISCONNECTED)
+  {
+    bleScanMode = COLDSENSES_SCANMODE_ALLSCAN;
+  }
   lwmqtt_err_t mqttError = mqttClient.lastError();
   bool isMqttConnected = mqttClient.connected();
+
   if (!isMqttError && mqttError != LWMQTT_SUCCESS)
   {
     mqttState = COLDSENSES_MQTT_CONNECT_FAILED;
     isMqttError = true;
+    bleScanMode = COLDSENSES_SCANMODE_ALLSCAN;
   }
   else if (prevMqttState == COLDSENSES_MQTT_WAITING && isMqttConnected)
   {
     mqttState = COLDSENSES_MQTT_CONNECTED;
+    subscribeMqttTopics();
   }
   else if (prevMqttState == COLDSENSES_MQTT_CONNECTED && !isMqttConnected)
   {
     mqttState = COLDSENSES_MQTT_DISCONNECTED;
+    isMqttError = true;
+    bleScanMode = COLDSENSES_SCANMODE_ALLSCAN;
   }
 
-  miTagScanner.scan();
-  tagState = COLDSENSES_TAG_SCANNED;
-
-  int tagsCount = miTagScanner.getTagsCount();
-  for (int i = 0; i < tagsCount; i++)
+  if (millis() - alarmLastTs >= BUZZER_INTERVAL)
   {
-    MiTagData *tagData = miTagScanner.getTagDataAt(i);
-    if (tagData && miTagScanner.isTagActive(tagData))
-    {
-      emitMqtt(*tagData);
-    }
+    alarmLastTs = millis();
+  }
+
+  if (buzzerEnable && !stopAlarmFlag && tagAlarm && (millis() - alarmLastTs) <= BUZZER_BEEP_DURATION)
+  {
+    alarmBuzzer();
+  }
+  else
+  {
+    stopBuzzer();
   }
 
   delay(10);
@@ -351,6 +396,30 @@ static void update_screen_task(lv_timer_t *timer)
   }
 }
 
+static void mi_scan_task(void *arg)
+{
+  if (tagState != COLDSENSES_TAG_WAITING)
+  {
+    miTagScanner.scan();
+
+    tagState = COLDSENSES_TAG_SCANNED;
+
+    int tagsCount = miTagScanner.getTagsCount();
+    for (int i = 0; i < tagsCount; i++)
+    {
+      MiTagData *tagData = miTagScanner.getTagDataAt(i);
+      if (tagData && miTagScanner.isTagActive(tagData))
+      {
+        coldsenses_notify_result tagNotifyResult = miTagScanner.getTagNotifyResult((*tagData).rawMacAddress);
+        if (bleScanMode != COLDSENSES_SCANMODE_SELECTED_SCAN || tagNotifyResult != COLDSENSES_NOTIFY_NODATA)
+        {
+          emitMqtt(*tagData);
+        }
+      }
+    }
+  }
+}
+
 #if COLDSENSES_DEBUG_TICK
 static void debug_tick_task(lv_timer_t *timer)
 {
@@ -395,11 +464,12 @@ static void initEEPROM()
     Serial.println("Create New EEPROM Save");
 #endif
     EEPROM.writeULong64(EEPROM_HEADER_ADDR, EEPROM_HEADER_KEY);
-    EEPROM.writeUInt(EEPROM_VERSION_ADDR, COLDSENSES_GATEWAY_VERSION);
+    EEPROM.writeUShort(EEPROM_VERSION_ADDR, COLDSENSES_GATEWAY_VERSION);
     EEPROM.writeString(EEPROM_SSID_ADDR, wifiSSID);
     EEPROM.writeString(EEPROM_WIFIPW_ADDR, wifiPassword);
     EEPROM.writeDouble(EEPROM_GPSLAT_ADDR, gpsLatitude);
     EEPROM.writeDouble(EEPROM_GPSLONG_ADDR, gpsLongitude);
+    EEPROM.writeBool(EEPROM_BUZZER_ENABLE_ADDR, buzzerEnable);
     EEPROM.commit();
 #if COLDSENSES_DEBUG_EEPROM
     Serial.println("EEPROM Saved");
@@ -417,6 +487,7 @@ static void initEEPROM()
   wifiPassword = EEPROM.readString(EEPROM_WIFIPW_ADDR);
   gpsLatitude = EEPROM.readDouble(EEPROM_GPSLAT_ADDR);
   gpsLongitude = EEPROM.readDouble(EEPROM_GPSLONG_ADDR);
+  buzzerEnable = EEPROM.readBool(EEPROM_BUZZER_ENABLE_ADDR);
 
 #if COLDSENSES_DEBUG_EEPROM
   Serial.println("EEPROM Values");
@@ -430,12 +501,19 @@ static void migrateEEPROMDataVersion()
 #if COLDSENSES_DEBUG_EEPROM
   Serial.println("Check EEPROM Save Version");
 #endif
-  uint16_t version = EEPROM.readUInt(EEPROM_VERSION_ADDR);
-  // TODO if read version < k do this => if(version < k) { ... }
+  uint16_t version = EEPROM.readUShort(EEPROM_VERSION_ADDR);
+
+  if (version < 2)
+  {
+    EEPROM.writeBool(EEPROM_BUZZER_ENABLE_ADDR, buzzerEnable);
+  }
+
   if (version < COLDSENSES_GATEWAY_VERSION)
   {
-    EEPROM.writeUInt(EEPROM_VERSION_ADDR, COLDSENSES_GATEWAY_VERSION);
+    EEPROM.writeUShort(EEPROM_VERSION_ADDR, COLDSENSES_GATEWAY_VERSION);
+    EEPROM.commit();
   }
+
 #if COLDSENSES_DEBUG_EEPROM
   Serial.println("EEPROM Save Updated");
 #endif
@@ -447,12 +525,14 @@ static void updateEEPROM()
   Serial.println("New EEPROM Values");
   _displayOptionValues();
 #endif
+
   EEPROM.writeULong64(EEPROM_HEADER_ADDR, EEPROM_HEADER_KEY);
-  EEPROM.writeUInt(EEPROM_VERSION_ADDR, COLDSENSES_GATEWAY_VERSION);
+  EEPROM.writeUShort(EEPROM_VERSION_ADDR, COLDSENSES_GATEWAY_VERSION);
   EEPROM.writeString(EEPROM_SSID_ADDR, wifiSSID);
   EEPROM.writeString(EEPROM_WIFIPW_ADDR, wifiPassword);
   EEPROM.writeDouble(EEPROM_GPSLAT_ADDR, gpsLatitude);
   EEPROM.writeDouble(EEPROM_GPSLONG_ADDR, gpsLongitude);
+  EEPROM.writeBool(EEPROM_BUZZER_ENABLE_ADDR, buzzerEnable);
   EEPROM.commit();
 
 #if COLDSENSES_DEBUG_EEPROM
@@ -474,6 +554,8 @@ static void _displayOptionValues()
   Serial.println(gpsLatitude);
   Serial.print("gpsLongitude: ");
   Serial.println(gpsLongitude);
+  Serial.print("buzzerEnable: ");
+  Serial.println(buzzerEnable ? "true" : "false");
 }
 #endif
 
@@ -493,7 +575,13 @@ static void beginWifi(String &wifiSSID, String &wifiPassword)
 
 static void beginMqtt()
 {
-  mqttClient.connect(mqttClientName.c_str());
+  mqttClient.connect(mqttClientName.c_str(), deviceMAC.c_str());
+}
+
+static void subscribeMqttTopics()
+{
+  mqttClient.subscribe(gwInfoTopic);
+  mqttClient.publish("fetch_gwinfo");
 }
 
 static void emitMqtt(MiTagData &tagData)
@@ -563,7 +651,8 @@ static void emitMqtt(MiTagData &tagData)
 #endif
 
 #if COLDSENSES_DEBUG_MQTT
-  Serial.print("OK? [W,HB,GEO]: [");
+  Serial.print(macAddress);
+  Serial.print(" OK? [W,HB,GEO]: [");
   Serial.print(wSentSuccess ? "T" : "F");
   Serial.print(",");
   Serial.print(hbSentSuccess ? "T" : "F");
@@ -571,6 +660,70 @@ static void emitMqtt(MiTagData &tagData)
   Serial.print(geoSentSuccess ? "T" : "F");
   Serial.println("]");
 #endif
+}
+
+static void mqttMessageCallback(String &topic, String &payload)
+{
+#if COLDSENSES_DEBUG_MQTT
+  Serial.print("topic: [");
+  Serial.print(topic);
+  Serial.print(",");
+  Serial.print(payload);
+  Serial.println("]");
+#endif
+
+  if (topic == gwInfoTopic)
+  {
+    if (payload == "#")
+    {
+      bleScanMode = COLDSENSES_SCANMODE_ALLSCAN;
+    }
+    else
+    {
+      miTagScanner.clearTagNotifyDataResults();
+
+      int payloadStrIndex = 0;
+      int payloadSplitIndex = payload.indexOf(',', payloadStrIndex);
+      do
+      {
+        String token = payload.substring(payloadStrIndex, payloadSplitIndex);
+        payloadStrIndex = payloadSplitIndex + 1;
+        payloadSplitIndex = payload.indexOf(',', payloadStrIndex);
+
+        MiTagNotifyData notifyData;
+        int tokenSplitIndex1 = token.indexOf(':', 0);
+        int tokenSplitIndex2 = token.indexOf(':', tokenSplitIndex1 + 1);
+        int tokenSplitIndex3 = token.indexOf(':', tokenSplitIndex2 + 1);
+        int tokenSplitIndex4 = token.length();
+
+        if (tokenSplitIndex1 < 0 || tokenSplitIndex2 < 0 || tokenSplitIndex3 < 0)
+        {
+          continue;
+        }
+
+        String macAddress = token.substring(0, tokenSplitIndex1);
+        notifyData.rawMacAddress = MiTagScanner::toRawMacAddress(macAddress.c_str());
+        notifyData.isNotify = token.substring(tokenSplitIndex1 + 1, tokenSplitIndex2) == "1";
+        notifyData.lowC = token.substring(tokenSplitIndex2 + 1, tokenSplitIndex3).toDouble();
+        notifyData.highC = token.substring(tokenSplitIndex3 + 1, tokenSplitIndex4).toDouble();
+
+#if COLDSENSES_DEBUG_MQTT
+        Serial.print("Notify Data: [");
+        Serial.print(prettyMacAddress(notifyData.rawMacAddress).c_str());
+        Serial.print(",");
+        Serial.print(notifyData.isNotify ? "true" : "false");
+        Serial.print(",");
+        Serial.print(notifyData.lowC);
+        Serial.print(",");
+        Serial.print(notifyData.highC);
+        Serial.println("]");
+#endif
+
+        miTagScanner.addTagNotifyData(notifyData);
+      } while (payloadSplitIndex != -1);
+      bleScanMode = COLDSENSES_SCANMODE_SELECTED_SCAN;
+    }
+  }
 }
 
 bool isOptionDirty(coldsenses_input_target target)
@@ -585,6 +738,8 @@ bool isOptionDirty(coldsenses_input_target target)
     return gpsLatitude != optionGpsLat;
   case COLDSENSES_TARGET_GPS_LONGITUDE:
     return gpsLongitude != optionGpsLng;
+  case COLDSENSES_TARGET_ALARM_BUZZER:
+    return buzzerEnable != optionBuzzerEnable;
   case COLDSENSES_NO_TARGET:
   default:
     return false;
@@ -594,7 +749,8 @@ bool isOptionDirty(coldsenses_input_target target)
 bool isOptionsDirty()
 {
   return isOptionDirty(COLDSENSES_TARGET_WIFI_SSID) || isOptionDirty(COLDSENSES_TARGET_WIFI_PASSWORD) ||
-         isOptionDirty(COLDSENSES_TARGET_GPS_LATITUDE) || isOptionDirty(COLDSENSES_TARGET_GPS_LONGITUDE);
+         isOptionDirty(COLDSENSES_TARGET_GPS_LATITUDE) || isOptionDirty(COLDSENSES_TARGET_GPS_LONGITUDE) ||
+         isOptionDirty(COLDSENSES_TARGET_ALARM_BUZZER);
 }
 
 bool isOptionValid(coldsenses_input_target target)
@@ -609,6 +765,8 @@ bool isOptionValid(coldsenses_input_target target)
     return optionGpsLat >= -90 && optionGpsLat <= 90;
   case COLDSENSES_TARGET_GPS_LONGITUDE:
     return optionGpsLng >= -180 && optionGpsLng <= 180;
+  case COLDSENSES_TARGET_ALARM_BUZZER:
+    return true;
   case COLDSENSES_NO_TARGET:
   default:
     return false;
@@ -618,7 +776,8 @@ bool isOptionValid(coldsenses_input_target target)
 bool isOptionsValid()
 {
   return isOptionValid(COLDSENSES_TARGET_WIFI_SSID) && isOptionValid(COLDSENSES_TARGET_WIFI_PASSWORD) &&
-         isOptionValid(COLDSENSES_TARGET_GPS_LATITUDE) && isOptionValid(COLDSENSES_TARGET_GPS_LONGITUDE);
+         isOptionValid(COLDSENSES_TARGET_GPS_LATITUDE) && isOptionValid(COLDSENSES_TARGET_GPS_LONGITUDE) &&
+         isOptionValid(COLDSENSES_TARGET_ALARM_BUZZER);
 }
 
 void restoreSaveToOptions()
@@ -627,6 +786,7 @@ void restoreSaveToOptions()
   optionWifiPassword = String(wifiPassword);
   optionGpsLat = gpsLatitude;
   optionGpsLng = gpsLongitude;
+  optionBuzzerEnable = buzzerEnable;
 }
 
 void applySaveOptions()
@@ -636,6 +796,7 @@ void applySaveOptions()
   wifiPassword = String(optionWifiPassword);
   gpsLatitude = optionGpsLat;
   gpsLongitude = optionGpsLng;
+  buzzerEnable = optionBuzzerEnable;
 
 #if COLDSENSES_ALLOW_EEPROM
   updateEEPROM();
@@ -705,6 +866,7 @@ static void initUI()
   instanceOptionHolder(COLDSENSES_OPTION_SET_WIFI_PASSWORD, ui_event_wifi_password_option, uiWifiPasswordOptionHolder);
   instanceOptionHolder(COLDSENSES_OPTION_SET_GPS_LATITUDE, ui_event_gps_lat_option, uiGpsLatOptionHolder);
   instanceOptionHolder(COLDSENSES_OPTION_SET_GPS_LONGITUDE, ui_event_gps_lng_option, uiGpsLngOptionHolder);
+  instanceOptionHolder(COLDSENSES_OPTION_TOGGLE_ALARM_BUZZER, ui_event_toggle_alarm, uiAlarmOptionHolder);
   instanceOptionHolder(COLDSENSES_OPTION_CHECK_VERSION, ui_event_check_version_option, uiCheckVersionHolder);
   lv_obj_toggle_display(uiCheckVersionHolder.mark_edit_img, false);
 
@@ -803,6 +965,7 @@ static void instanceTagHolderAt(uint8_t i, ui_coldsenses_tag_holder &holder)
   holder.humid_label = tagHumidLabel;
   holder.name_label = tagNamelabel;
   holder.mac_label = tagMacLabel;
+  holder.inner_panel = tagInnerPanel;
   holder.tag_panel = tagPanel;
 }
 
@@ -834,6 +997,9 @@ static void instanceOptionHolder(coldsenses_option option, lv_event_cb_t event, 
     break;
   case COLDSENSES_OPTION_SET_GPS_LONGITUDE:
     optionText = "GPS Longitude";
+    break;
+  case COLDSENSES_OPTION_TOGGLE_ALARM_BUZZER:
+    optionText = "Buzzer Alarm";
     break;
   case COLDSENSES_OPTION_CHECK_VERSION:
     optionText = "Check Version";
@@ -874,7 +1040,9 @@ static void instanceOptionHolder(coldsenses_option option, lv_event_cb_t event, 
   lv_obj_toggle_display(optionEditMarkImage, false);
 
   holder.option_panel = optionListPanelHolder;
+  holder.text_label = optionListLabel;
   holder.mark_edit_img = optionEditMarkImage;
+  holder.mark_arrow_right = optionNextImage;
   holder.type = option;
 }
 
@@ -940,6 +1108,7 @@ static void ui_event_gps_lat_option(lv_event_t *e)
     transitionToInputScreen();
   }
 }
+
 static void ui_event_gps_lng_option(lv_event_t *e)
 {
   lv_event_code_t event_code = lv_event_get_code(e);
@@ -953,6 +1122,16 @@ static void ui_event_gps_lng_option(lv_event_t *e)
   }
 }
 
+static void ui_event_toggle_alarm(lv_event_t *e)
+{
+  lv_event_code_t event_code = lv_event_get_code(e);
+  lv_obj_t *target = lv_event_get_target(e);
+  if (event_code == LV_EVENT_CLICKED)
+  {
+    optionBuzzerEnable = !optionBuzzerEnable;
+  }
+}
+
 static void ui_event_check_version_option(lv_event_t *e)
 {
 
@@ -961,7 +1140,11 @@ static void ui_event_check_version_option(lv_event_t *e)
   if (event_code == LV_EVENT_CLICKED)
   {
     afterAlarmAction = COLDSENSES_ACTION_AFTER_CHECK_VERSION;
-    String text = "Coldsenses Gateway\nVersion: ";
+    String text = "Coldsenses Gateway\nMAC: ";
+    String macAddress = WiFi.macAddress();
+    macAddress.toUpperCase();
+    text += macAddress;
+    text += "\nVersion: ";
     text += COLDSENSES_GATEWAY_VERSION_FULL;
     text += " (";
     text += COLDSENSES_GATEWAY_VERSION;
@@ -971,11 +1154,23 @@ static void ui_event_check_version_option(lv_event_t *e)
   }
 }
 
+static void stopBuzzer()
+{
+  digitalWrite(BUZZER_GPIO, LOW);
+}
+
+static void alarmBuzzer()
+{
+  digitalWrite(BUZZER_GPIO, HIGH);
+}
+
 void transitionToHomeScreen()
 {
   lv_scr_load_anim(ui_HomeScreen, LV_SCR_LOAD_ANIM_NONE, 0, 0, false);
   lv_obj_set_parent(ui_StatusPanel, ui_HomeScreen);
   lv_label_set_text(ui_TitleLabel, "Home");
+
+  stopAlarmFlag = false;
 }
 
 void transitionToOptionScreen()
@@ -984,6 +1179,8 @@ void transitionToOptionScreen()
   lv_scr_load_anim(ui_OptionScreen, LV_SCR_LOAD_ANIM_NONE, 0, 0, false);
   lv_obj_set_parent(ui_StatusPanel, ui_OptionScreen);
   lv_label_set_text(ui_TitleLabel, "Options");
+
+  stopAlarmFlag = true;
 }
 
 void transitionToInputScreen()
@@ -1004,9 +1201,6 @@ void changeAlarmScreen(String message, bool showOK, bool showCancel, bool showSp
   lv_obj_toggle_clickable(ui_ActionOkButton, showOK);
   lv_obj_toggle_display(ui_ActionCancelButton, showCancel);
   lv_obj_toggle_clickable(ui_ActionCancelButton, showCancel);
-
-  // TODO handle single show
-
   lv_obj_toggle_display(ui_AlertSpinner, showSpinner);
 
   lv_label_set_text(ui_AlertLabel, message.c_str());
@@ -1021,13 +1215,14 @@ void changeInputValueTo(String &value, bool passwordMode, int maxLength)
 
 static void updateStatusBar()
 {
-  if (millis() - blinkLastTs > 2000)
+  if (millis() - blinkLastTs > BLINK_DELAY)
   {
     blinkLastTs = millis();
   }
   updateWifiStatusUI();
   updateBLEStatusUI();
   updateMqttStatusUI();
+  updateAlarmStatusUI();
 }
 
 static void updateWifiStatusUI()
@@ -1046,7 +1241,7 @@ static void updateWifiStatusUI()
   case COLDSENSES_WL_WAITING:
   default:
     lv_obj_toggle_display(ui_WifiOffStatusImage, false);
-    bool isImgHidden = millis() - blinkLastTs < 1000;
+    bool isImgHidden = millis() - blinkLastTs < (BLINK_DELAY / 2);
     lv_obj_toggle_display(ui_WifiStatusImage, !isImgHidden);
   }
 }
@@ -1090,6 +1285,22 @@ static void updateMqttStatusUI()
   }
 }
 
+static void updateAlarmStatusUI()
+{
+  bool isImgHidden = tagAlarm && millis() - blinkLastTs < 1000;
+
+  if (!buzzerEnable)
+  {
+    lv_obj_toggle_display(ui_AlarmStatusImage, false);
+    lv_obj_toggle_display(ui_AlarmOffStatusImage, !isImgHidden);
+  }
+  else
+  {
+    lv_obj_toggle_display(ui_AlarmOffStatusImage, false);
+    lv_obj_toggle_display(ui_AlarmStatusImage, !isImgHidden);
+  }
+}
+
 static void updateHomeScreen()
 {
   if (tagState == COLDSENSES_TAG_SCANNED)
@@ -1100,37 +1311,63 @@ static void updateHomeScreen()
       spinnerHide = true;
     }
 
+    bool isShouldAlarm = false;
+
     int tagsCount = miTagScanner.getTagsCount();
     MiTagData *orderedTagData[tagsCount];
-    int orderIndex = 0;
+    int actualCount = 0;
     for (int i = 0; i < tagsCount; i++)
     {
       MiTagData *tagData = miTagScanner.getTagDataAt(i);
-      if (tagData && miTagScanner.isTagActive(tagData))
-      {
-        orderedTagData[orderIndex] = tagData;
-        orderIndex += 1;
-      }
+      orderedTagData[i] = tagData;
+      actualCount += 1;
     }
-    for (int i = 0; i < tagsCount; i++)
+
+    // bubble sort
+    for (int i = 1; i < actualCount; i++)
     {
-      MiTagData *tagData = miTagScanner.getTagDataAt(i);
-      if (tagData && !miTagScanner.isTagActive(tagData))
+      for (int j = 0; j < i; j++)
       {
-        orderedTagData[orderIndex] = tagData;
-        orderIndex += 1;
+        MiTagData *tagData1 = orderedTagData[j];
+        MiTagData *tagData2 = orderedTagData[i];
+        if (bleScanMode == COLDSENSES_SCANMODE_SELECTED_SCAN)
+        {
+          coldsenses_notify_result tagNotifyResult1 = miTagScanner.getTagNotifyResult((*tagData1).rawMacAddress);
+          coldsenses_notify_result tagNotifyResult2 = miTagScanner.getTagNotifyResult((*tagData2).rawMacAddress);
+          if (tagNotifyResult1 == COLDSENSES_NOTIFY_NODATA && tagNotifyResult2 != COLDSENSES_NOTIFY_NODATA)
+          {
+            orderedTagData[i] = tagData1;
+            orderedTagData[j] = tagData2;
+          }
+        }
+        else if (!miTagScanner.isTagActive(tagData1) && miTagScanner.isTagActive(tagData2))
+        {
+          orderedTagData[i] = tagData1;
+          orderedTagData[j] = tagData2;
+        }
       }
     }
 
     for (int i = 0; i < MAX_TAGS_REMEMBER; i++)
     {
-      updateTagHolderData(i < orderIndex ? orderedTagData[i] : NULL, i);
+      if (i < actualCount && !isShouldAlarm)
+      {
+        coldsenses_notify_result tagNotifyResult = miTagScanner.getTagNotifyResult((*orderedTagData[i]).rawMacAddress);
+        if (bleScanMode == COLDSENSES_SCANMODE_SELECTED_SCAN && (tagNotifyResult == COLDSENSES_NOTIFY_HIGH || tagNotifyResult == COLDSENSES_NOTIFY_LOW))
+        {
+          isShouldAlarm = true;
+        }
+      }
+
+      updateTagHolderData(i < actualCount ? orderedTagData[i] : NULL, i);
     }
 
     String textCountDisplay = String(miTagScanner.getActiveTagCount(), 10);
     textCountDisplay += "/";
-    textCountDisplay += String(tagsCount, 10);
+    textCountDisplay += String(actualCount, 10);
     lv_label_set_text(ui_TagCountLabel, textCountDisplay.c_str());
+
+    tagAlarm = isShouldAlarm;
   }
 }
 
@@ -1138,42 +1375,52 @@ static void updateTagHolderData(MiTagData *tagDataRef, int i)
 {
   ui_coldsenses_tag_holder holder = uiTagHolders[i];
 
-  if (holder.tag_panel)
-  {
-    lv_obj_toggle_display(holder.tag_panel, !!tagDataRef);
-  }
-
   if (!tagDataRef)
   {
+    lv_obj_toggle_display(holder.tag_panel, false);
     return;
   }
 
   MiTagData tagData = (*tagDataRef);
+  coldsenses_notify_result tagNotifyResult = miTagScanner.getTagNotifyResult(tagData.rawMacAddress);
 
-  if (holder.tag_panel)
+  if (bleScanMode == COLDSENSES_SCANMODE_SELECTED_SCAN && tagNotifyResult == COLDSENSES_NOTIFY_NODATA)
   {
-    lv_obj_set_style_opa(holder.tag_panel, miTagScanner.isTagActive(tagDataRef) ? 255 : 128, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_toggle_display(holder.tag_panel, false);
+    return;
   }
 
-  if (holder.mac_label)
+  lv_obj_toggle_display(holder.tag_panel, true);
+
+  bool isActive = miTagScanner.isTagActive(tagDataRef);
+  lv_color_t tagColor = lv_color_hex(0xFFFFFF);
+  lv_color_t innerColor = lv_color_hex(0xD3D3D3);
+  if (!isActive)
   {
-    lv_label_set_text(holder.mac_label, prettyMacAddress(tagData.rawMacAddress).c_str());
+    tagColor = lv_color_hex(0xFEFFF3);
+    innerColor = lv_color_hex(0xFFFFD0);
+  }
+  else if (bleScanMode == COLDSENSES_SCANMODE_SELECTED_SCAN)
+  {
+    if (tagNotifyResult == COLDSENSES_NOTIFY_HIGH)
+    {
+      tagColor = lv_color_hex(0xFFF3F3);
+      innerColor = lv_color_hex(0xFFBEBE);
+    }
+    else if (tagNotifyResult == COLDSENSES_NOTIFY_LOW)
+    {
+      tagColor = lv_color_hex(0xF3FAFF);
+      innerColor = lv_color_hex(0xBECCFF);
+    }
   }
 
-  if (holder.name_label)
-  {
-    lv_label_set_text(holder.name_label, tagData.name.c_str());
-  }
+  lv_obj_set_style_bg_color(holder.tag_panel, tagColor, LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_set_style_bg_color(holder.inner_panel, innerColor, LV_PART_MAIN | LV_STATE_DEFAULT);
 
-  if (holder.temp_label)
-  {
-    lv_label_set_text(holder.temp_label, String(tagData.tempC, 1).c_str());
-  }
-
-  if (holder.humid_label)
-  {
-    lv_label_set_text(holder.humid_label, String(tagData.humidRH, 0).c_str());
-  }
+  lv_label_set_text(holder.mac_label, prettyMacAddress(tagData.rawMacAddress).c_str());
+  lv_label_set_text(holder.name_label, tagData.name.c_str());
+  lv_label_set_text(holder.temp_label, String(tagData.tempC, 1).c_str());
+  lv_label_set_text(holder.humid_label, String(tagData.humidRH, 0).c_str());
 }
 
 static void updateOptionScreen()
@@ -1189,6 +1436,22 @@ static void updateOptionScreen()
 
   bool gpsLngDirty = isOptionDirty(COLDSENSES_TARGET_GPS_LONGITUDE);
   lv_obj_toggle_display(uiGpsLngOptionHolder.mark_edit_img, gpsLngDirty);
+
+  bool buzzerEnableDirty = isOptionDirty(COLDSENSES_TARGET_ALARM_BUZZER);
+  lv_obj_toggle_display(uiAlarmOptionHolder.mark_edit_img, buzzerEnableDirty);
+  lv_obj_toggle_display(uiAlarmOptionHolder.mark_arrow_right, false);
+
+  String buzzerAlarmText = "Buzzer Alarm";
+  if (optionBuzzerEnable)
+  {
+    buzzerAlarmText += " [Enable]";
+  }
+  else
+  {
+    buzzerAlarmText += " [Disabled]";
+  }
+
+  lv_label_set_text(uiAlarmOptionHolder.text_label, buzzerAlarmText.c_str());
 
   bool isDirty = isOptionsDirty();
 

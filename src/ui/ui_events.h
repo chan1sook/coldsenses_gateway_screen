@@ -10,6 +10,7 @@
 extern "C" {
 #endif
 
+void suppressAlarm(lv_event_t * e);
 void to_option_btn_action(lv_event_t * e);
 void option_save_btn_action(lv_event_t * e);
 void cancel_save_btn_action(lv_event_t * e);

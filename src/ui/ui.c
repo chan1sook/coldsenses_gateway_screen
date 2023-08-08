@@ -20,6 +20,7 @@ lv_obj_t * ui_LoadingLabel;
 // SCREEN: ui_HomeScreen
 void ui_HomeScreen_screen_init(void);
 lv_obj_t * ui_HomeScreen;
+void ui_event_TagsHolderPanel(lv_event_t * e);
 lv_obj_t * ui_TagsHolderPanel;
 lv_obj_t * ui_TagPanelT;
 lv_obj_t * ui_TagInnerPanelT;
@@ -34,6 +35,8 @@ lv_obj_t * ui_WifiOffStatusImage;
 lv_obj_t * ui_BLEStatusImage;
 lv_obj_t * ui_ServerStatusImage;
 lv_obj_t * ui_ServerOffStatusImage;
+lv_obj_t * ui_AlarmStatusImage;
+lv_obj_t * ui_AlarmOffStatusImage;
 lv_obj_t * ui_TitleLabel;
 void ui_event_ToOptionButton(lv_event_t * e);
 lv_obj_t * ui_ToOptionButton;
@@ -166,6 +169,14 @@ void TagUnblur_Animation(lv_obj_t * TargetObject, int delay)
 }
 
 ///////////////////// FUNCTIONS ////////////////////
+void ui_event_TagsHolderPanel(lv_event_t * e)
+{
+    lv_event_code_t event_code = lv_event_get_code(e);
+    lv_obj_t * target = lv_event_get_target(e);
+    if(event_code == LV_EVENT_CLICKED) {
+        suppressAlarm(e);
+    }
+}
 void ui_event_ToOptionButton(lv_event_t * e)
 {
     lv_event_code_t event_code = lv_event_get_code(e);

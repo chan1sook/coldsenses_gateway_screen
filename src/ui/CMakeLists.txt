@@ -5,12 +5,15 @@ SET(SOURCES screens/ui_SplashScreen.c
     screens/ui_AlertScreen.c
     ui.c
     ui_helpers.c
+    ui_events.cpp
     images/ui_img_coldsenses_logo_png.c
     images/ui_img_wifi_png.c
     images/ui_img_wifi_off_png.c
     images/ui_img_bluetooth_png.c
     images/ui_img_clouds_png.c
     images/ui_img_cloud_slash_png.c
+    images/ui_img_bell_png.c
+    images/ui_img_bell_slash_png.c
     images/ui_img_gear_png.c
     images/ui_img_chevron_right_png.c
     images/ui_img_asterisk_png.c

@@ -23,6 +23,7 @@ extern void transitionToInputScreen();
 extern void changeAlarmScreen(String message, bool showOK, bool showCancel, bool showSpinner);
 
 extern String inputTemp;
+extern bool stopAlarmFlag;
 
 extern coldsenses_after_alarm_action afterAlarmAction;
 extern coldsenses_input_target inputTarget;
@@ -148,4 +149,9 @@ void to_option_btn_action(lv_event_t *e)
   restoreSaveToOptions();
 
   transitionToOptionScreen();
+}
+
+void suppressAlarm(lv_event_t *e)
+{
+  stopAlarmFlag = true;
 }

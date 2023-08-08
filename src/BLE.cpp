@@ -28,11 +28,17 @@ void MiTagScanner::init()
   this->_pBLEScan->setActiveScan(true);
   this->_pBLEScan->setInterval(100);
   this->_pBLEScan->setWindow(99);
+  this->_pBLEScan->start(0, nullptr, false);
+}
+
+void MiTagScanner::clearTagsResults()
+{
+  this->_tagsCount = 0;
 }
 
 void MiTagScanner::scan()
 {
-  BLEScanResults foundDevices = this->_pBLEScan->start(5, false);
+  BLEScanResults foundDevices = this->_pBLEScan->getResults();
   int nDevice = foundDevices.getCount();
   for (int i = 0; i < nDevice; i++)
   {
@@ -48,7 +54,7 @@ void MiTagScanner::scan()
       MiTagData data;
       data.name = device.getName();
       data.ts = millis();
-      _parseRawDataTo(rawData, data);
+      this->_parseRawDataTo(rawData, data);
       this->_addMiTagData(data);
     }
   }
@@ -60,6 +66,7 @@ void MiTagScanner::scan()
   Serial.println("Scan done!");
 
   this->_pBLEScan->clearResults();
+  this->_pBLEScan->start(0, nullptr, false);
 }
 
 int MiTagScanner::getTagsCount()
@@ -79,6 +86,18 @@ int MiTagScanner::getActiveTagCount()
   }
 
   return onlines;
+}
+
+int MiTagScanner::findTagData(std::string &rawMacAddress)
+{
+  for (int i = 0; i < this->_tagsCount; i++)
+  {
+    if (rawMacAddress == this->_tags[i].rawMacAddress)
+    {
+      return i;
+    }
+  }
+  return -1;
 }
 
 MiTagData *MiTagScanner::getTagDataAt(int i)
@@ -102,13 +121,11 @@ bool MiTagScanner::isMiTagDataValid(std::string &rawData)
 
 void MiTagScanner::_addMiTagData(MiTagData &tagData)
 {
-  for (int i = 0; i < this->_tagsCount; i++)
+  int index = this->findTagData(tagData.rawMacAddress);
+  if (index != -1)
   {
-    if (tagData.rawMacAddress == this->_tags[i].rawMacAddress)
-    {
-      this->_tags[i] = tagData;
-      return;
-    }
+    this->_tags[index] = tagData;
+    return;
   }
 
   if (this->_tagsCount < MAX_TAGS_REMEMBER)
@@ -160,8 +177,83 @@ void MiTagScanner::_parseRawDataTo(std::string &rawData, MiTagData &to)
   to.flag = rawData[14];
 }
 
-#if COLDSENSES_DEBUG_BLE
-std::string MiTagScanner::_prettyRawData(std::string &rawData)
+int MiTagScanner::getTagNotifyDataCount()
+{
+  return this->_notifyCount;
+}
+
+void MiTagScanner::addTagNotifyData(MiTagNotifyData &notifyData)
+{
+  for (int i = 0; i < this->_notifyCount; i++)
+  {
+    if (notifyData.rawMacAddress == this->_notifyDataArr[i].rawMacAddress)
+    {
+      this->_notifyDataArr[i] = notifyData;
+      return;
+    }
+  }
+
+  if (this->_notifyCount < MAX_NOTIFY_REMEMBER)
+  {
+    this->_notifyDataArr[this->_notifyCount] = notifyData;
+    this->_notifyCount += 1;
+    return;
+  }
+}
+
+void MiTagScanner::clearTagNotifyDataResults()
+{
+  this->_notifyCount = 0;
+}
+
+int MiTagScanner::findTagNotifyData(std::string &rawMacAddress)
+{
+  for (int i = 0; i < this->_notifyCount; i++)
+  {
+    if (rawMacAddress == this->_notifyDataArr[i].rawMacAddress)
+    {
+      return i;
+    }
+  }
+  return -1;
+}
+
+bool MiTagScanner::isTagNotifyDataExists(std::string &rawMacAddress)
+{
+  return this->findTagNotifyData(rawMacAddress) != -1;
+}
+
+coldsenses_notify_result MiTagScanner::getTagNotifyResult(std::string &rawMacAddress)
+{
+  int notifyIndex = this->findTagNotifyData(rawMacAddress);
+  int tagIndex = this->findTagData(rawMacAddress);
+  if (notifyIndex == -1 || tagIndex == -1)
+  {
+    return COLDSENSES_NOTIFY_NODATA;
+  }
+
+  MiTagData data = this->_tags[tagIndex];
+  MiTagNotifyData notifyData = this->_notifyDataArr[notifyIndex];
+
+  if (!notifyData.isNotify)
+  {
+    return COLDSENSES_NOTIFY_NORMAL;
+  }
+  if (data.tempC >= notifyData.highC)
+  {
+    return COLDSENSES_NOTIFY_HIGH;
+  }
+  else if (data.tempC <= notifyData.lowC)
+  {
+    return COLDSENSES_NOTIFY_LOW;
+  }
+  else
+  {
+    return COLDSENSES_NOTIFY_NORMAL;
+  }
+}
+
+std::string MiTagScanner::prettyRawData(std::string &rawData)
 {
   String buffer = "[";
   int len = rawData.length();
@@ -177,10 +269,23 @@ std::string MiTagScanner::_prettyRawData(std::string &rawData)
   return buffer.c_str();
 }
 
+std::string MiTagScanner::toRawMacAddress(std::string macAddress)
+{
+  std::string result;
+  for (int i = 0; i < macAddress.length(); i += 2)
+  {
+    char m = (char)strtol(macAddress.substr(i, 2).c_str(), nullptr, 16);
+    result += m;
+  }
+  return result;
+}
+
+#if COLDSENSES_DEBUG_BLE
+
 void MiTagScanner::_debugBLEData(std::string &rawData)
 {
   int len = rawData.length();
   Serial.print("Data: ");
-  Serial.println(_prettyRawData(rawData).c_str());
+  Serial.println(MiTagScanner.prettyRawData(rawData).c_str());
 }
 #endif

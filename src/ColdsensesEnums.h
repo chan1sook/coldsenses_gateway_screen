@@ -32,6 +32,7 @@ typedef enum
   COLDSENSES_OPTION_SET_WIFI_PASSWORD,
   COLDSENSES_OPTION_SET_GPS_LATITUDE,
   COLDSENSES_OPTION_SET_GPS_LONGITUDE,
+  COLDSENSES_OPTION_TOGGLE_ALARM_BUZZER,
   COLDSENSES_OPTION_CHECK_VERSION,
 } coldsenses_option;
 
@@ -42,6 +43,7 @@ typedef enum
   COLDSENSES_TARGET_WIFI_PASSWORD,
   COLDSENSES_TARGET_GPS_LATITUDE,
   COLDSENSES_TARGET_GPS_LONGITUDE,
+  COLDSENSES_TARGET_ALARM_BUZZER,
 } coldsenses_input_target;
 
 typedef enum
@@ -59,6 +61,7 @@ typedef enum
 typedef struct
 {
   lv_obj_t *tag_panel;
+  lv_obj_t *inner_panel;
   lv_obj_t *mac_label;
   lv_obj_t *name_label;
   lv_obj_t *temp_label;
@@ -68,7 +71,9 @@ typedef struct
 typedef struct
 {
   lv_obj_t *option_panel;
+  lv_obj_t *text_label;
   lv_obj_t *mark_edit_img;
+  lv_obj_t *mark_arrow_right;
   coldsenses_option type;
 } ui_coldsenses_option_holder;
 

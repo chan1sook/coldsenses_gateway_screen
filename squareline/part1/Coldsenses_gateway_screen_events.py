@@ -58,3 +58,7 @@ def option_save_btn_action(event_struct):
 def to_option_btn_action(event_struct):
     return
 
+
+def suppressAlarm(event_struct):
+    return
+
