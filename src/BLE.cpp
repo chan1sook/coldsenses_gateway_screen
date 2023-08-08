@@ -36,34 +36,50 @@ void MiTagScanner::clearTagsResults()
   this->_tagsCount = 0;
 }
 
-void MiTagScanner::scan()
+void MiTagScanner::scan(coldsenses_scan_mode bleScanMode)
 {
   BLEScanResults foundDevices = this->_pBLEScan->getResults();
-  int nDevice = foundDevices.getCount();
-  for (int i = 0; i < nDevice; i++)
+  if (bleScanMode != COLDSENSES_SCANMODE_NOSCAN)
   {
-    NimBLEAdvertisedDevice device = foundDevices.getDevice(i);
 
-    std::string rawData = device.getServiceData(TARGET_UUID);
+    int nDevice = foundDevices.getCount();
+    for (int i = 0; i < nDevice; i++)
+    {
+      NimBLEAdvertisedDevice device = foundDevices.getDevice(i);
+
+      std::string rawData = device.getServiceData(TARGET_UUID);
 #if COLDSENSES_DEBUG_BLE
-    _debugBLEData(rawData);
+      _debugBLEData(rawData);
 #endif
 
-    if (this->isMiTagDataValid(rawData))
-    {
-      MiTagData data;
-      data.name = device.getName();
-      data.ts = millis();
-      this->_parseRawDataTo(rawData, data);
-      this->_addMiTagData(data);
-    }
-  }
+      if (this->isMiTagDataValid(rawData))
+      {
+        MiTagData data;
+        data.name = device.getName();
+        data.ts = millis();
+        this->_parseRawDataTo(rawData, data);
 
-  Serial.print("Devices found: ");
-  Serial.println(nDevice);
-  Serial.print("Tags found: ");
-  Serial.println(this->_tagsCount);
-  Serial.println("Scan done!");
+        switch (bleScanMode)
+        {
+        case COLDSENSES_SCANMODE_ALLSCAN:
+          this->_addMiTagData(data);
+          break;
+        case COLDSENSES_SCANMODE_SELECTED_SCAN:
+          if (this->findTagNotifyData(data.rawMacAddress) != -1)
+          {
+            this->_addMiTagData(data);
+          }
+          break;
+        }
+      }
+    }
+
+    Serial.print("Devices found: ");
+    Serial.println(nDevice);
+    Serial.print("Tags found: ");
+    Serial.println(this->_tagsCount);
+    Serial.println("Scan done!");
+  }
 
   this->_pBLEScan->clearResults();
   this->_pBLEScan->start(0, nullptr, false);

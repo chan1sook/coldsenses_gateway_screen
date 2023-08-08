@@ -400,7 +400,7 @@ static void mi_scan_task(void *arg)
 {
   if (tagState != COLDSENSES_TAG_WAITING)
   {
-    miTagScanner.scan();
+    miTagScanner.scan(bleScanMode);
 
     tagState = COLDSENSES_TAG_SCANNED;
 

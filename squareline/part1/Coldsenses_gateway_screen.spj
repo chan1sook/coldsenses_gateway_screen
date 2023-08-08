@@ -1947,9 +1947,9 @@
                                 "nid": 184720066,
                                 "strtype": "_style/Bg_Color",
                                 "intarray": [
-                                  211,
-                                  211,
-                                  211,
+                                  255,
+                                  255,
+                                  208,
                                   255
                                 ],
                                 "InheritedType": 7
@@ -2816,6 +2816,17 @@
                         "strtype": "_style/StyleState",
                         "strval": "DEFAULT",
                         "childs": [
+                          {
+                            "nid": -845457978,
+                            "strtype": "_style/Bg_Color",
+                            "intarray": [
+                              254,
+                              255,
+                              243,
+                              255
+                            ],
+                            "InheritedType": 7
+                          },
                           {
                             "nid": -427970804,
                             "strtype": "_style/Padding",
@@ -16292,7 +16303,7 @@
     "theme_color2": 0,
     "exportFolderPath": "C:\\Users\\chan1\\Desktop\\Works\\coldsenses_gateway_screen\\src\\ui",
     "projectExportFolderPath": "C:\\Users\\chan1\\Desktop\\Works\\coldsenses_gateway_screen",
-    "backup_cnt": 105,
+    "backup_cnt": 106,
     "autosave_cnt": 0,
     "lvgl_version": "8.3.6",
     "callfuncsexport": "CPP_FILE",

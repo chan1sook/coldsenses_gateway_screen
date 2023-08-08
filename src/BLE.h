@@ -67,7 +67,7 @@ public:
 
     void init();
     void clearTagsResults();
-    void scan();
+    void scan(coldsenses_scan_mode bleScanMode = COLDSENSES_SCANMODE_ALLSCAN);
     int getTagsCount();
     int getActiveTagCount();
     int findTagData(std::string &rawMacAddress);
