@@ -400,7 +400,7 @@ static void mi_scan_task(void *arg)
 {
   if (tagState != COLDSENSES_TAG_WAITING)
   {
-    miTagScanner.scan(bleScanMode);
+    miTagScanner.scan();
 
     tagState = COLDSENSES_TAG_SCANNED;
 
@@ -638,6 +638,8 @@ static void emitMqtt(MiTagData &tagData)
   bool geoSentSuccess = mqttClient.publish(topic.c_str(), geoPayload.c_str());
 
 #if COLDSENSES_DEBUG_MQTT >= 2
+  Serial.print("topic:");
+  Serial.println(topic);
   Serial.print("HB:");
   Serial.println(hbPayload);
   Serial.print("W:");
