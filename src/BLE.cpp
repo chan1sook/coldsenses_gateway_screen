@@ -41,7 +41,6 @@ void MiTagScanner::scan(coldsenses_scan_mode bleScanMode)
   BLEScanResults foundDevices = this->_pBLEScan->getResults();
   if (bleScanMode != COLDSENSES_SCANMODE_NOSCAN)
   {
-
     int nDevice = foundDevices.getCount();
     for (int i = 0; i < nDevice; i++)
     {
@@ -62,13 +61,8 @@ void MiTagScanner::scan(coldsenses_scan_mode bleScanMode)
         switch (bleScanMode)
         {
         case COLDSENSES_SCANMODE_ALLSCAN:
-          this->_addMiTagData(data);
-          break;
         case COLDSENSES_SCANMODE_SELECTED_SCAN:
-          if (this->findTagNotifyData(data.rawMacAddress) != -1)
-          {
-            this->_addMiTagData(data);
-          }
+          this->_addMiTagData(data);
           break;
         }
       }
@@ -82,7 +76,7 @@ void MiTagScanner::scan(coldsenses_scan_mode bleScanMode)
   }
 
   this->_pBLEScan->clearResults();
-  this->_pBLEScan->start(0, nullptr, false);
+  // this->_pBLEScan->start(0, nullptr, false);
 }
 
 int MiTagScanner::getTagsCount()

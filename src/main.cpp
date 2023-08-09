@@ -410,11 +410,7 @@ static void mi_scan_task(void *arg)
       MiTagData *tagData = miTagScanner.getTagDataAt(i);
       if (tagData && miTagScanner.isTagActive(tagData))
       {
-        coldsenses_notify_result tagNotifyResult = miTagScanner.getTagNotifyResult((*tagData).rawMacAddress);
-        if (bleScanMode != COLDSENSES_SCANMODE_SELECTED_SCAN || tagNotifyResult != COLDSENSES_NOTIFY_NODATA)
-        {
-          emitMqtt(*tagData);
-        }
+        emitMqtt(*tagData);
       }
     }
   }
@@ -1330,15 +1326,12 @@ static void updateHomeScreen()
       {
         MiTagData *tagData1 = orderedTagData[j];
         MiTagData *tagData2 = orderedTagData[i];
-        if (bleScanMode == COLDSENSES_SCANMODE_SELECTED_SCAN)
+        coldsenses_notify_result tagNotifyResult1 = miTagScanner.getTagNotifyResult((*tagData1).rawMacAddress);
+        coldsenses_notify_result tagNotifyResult2 = miTagScanner.getTagNotifyResult((*tagData2).rawMacAddress);
+        if (bleScanMode == COLDSENSES_SCANMODE_SELECTED_SCAN && tagNotifyResult1 == COLDSENSES_NOTIFY_NODATA && tagNotifyResult2 != COLDSENSES_NOTIFY_NODATA)
         {
-          coldsenses_notify_result tagNotifyResult1 = miTagScanner.getTagNotifyResult((*tagData1).rawMacAddress);
-          coldsenses_notify_result tagNotifyResult2 = miTagScanner.getTagNotifyResult((*tagData2).rawMacAddress);
-          if (tagNotifyResult1 == COLDSENSES_NOTIFY_NODATA && tagNotifyResult2 != COLDSENSES_NOTIFY_NODATA)
-          {
-            orderedTagData[i] = tagData1;
-            orderedTagData[j] = tagData2;
-          }
+          orderedTagData[i] = tagData1;
+          orderedTagData[j] = tagData2;
         }
         else if (!miTagScanner.isTagActive(tagData1) && miTagScanner.isTagActive(tagData2))
         {
@@ -1388,11 +1381,11 @@ static void updateTagHolderData(MiTagData *tagDataRef, int i)
   MiTagData tagData = (*tagDataRef);
   coldsenses_notify_result tagNotifyResult = miTagScanner.getTagNotifyResult(tagData.rawMacAddress);
 
-  if (bleScanMode == COLDSENSES_SCANMODE_SELECTED_SCAN && tagNotifyResult == COLDSENSES_NOTIFY_NODATA)
-  {
-    lv_obj_toggle_display(holder.tag_panel, false);
-    return;
-  }
+  // if (bleScanMode == COLDSENSES_SCANMODE_SELECTED_SCAN && tagNotifyResult == COLDSENSES_NOTIFY_NODATA)
+  // {
+  //   lv_obj_toggle_display(holder.tag_panel, false);
+  //   return;
+  // }
 
   lv_obj_toggle_display(holder.tag_panel, true);
 
