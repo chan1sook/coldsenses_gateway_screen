@@ -665,7 +665,7 @@ static void mqttMessageCallback(String &topic, String &payload)
 #if COLDSENSES_DEBUG_MQTT
   Serial.print("topic: [");
   Serial.print(topic);
-  Serial.print(",");
+  Serial.print("| ");
   Serial.print(payload);
   Serial.println("]");
 #endif
@@ -682,11 +682,20 @@ static void mqttMessageCallback(String &topic, String &payload)
 
       int payloadStrIndex = 0;
       int payloadSplitIndex = payload.indexOf(',', payloadStrIndex);
-      do
+      if (payloadSplitIndex == -1)
+      {
+        payloadSplitIndex = payload.length();
+      }
+
+      while (payloadStrIndex < payloadSplitIndex)
       {
         String token = payload.substring(payloadStrIndex, payloadSplitIndex);
         payloadStrIndex = payloadSplitIndex + 1;
         payloadSplitIndex = payload.indexOf(',', payloadStrIndex);
+        if (payloadSplitIndex == -1)
+        {
+          payloadSplitIndex = payload.length();
+        }
 
         MiTagNotifyData notifyData;
         int tokenSplitIndex1 = token.indexOf(':', 0);
@@ -718,7 +727,7 @@ static void mqttMessageCallback(String &topic, String &payload)
 #endif
 
         miTagScanner.addTagNotifyData(notifyData);
-      } while (payloadSplitIndex != -1);
+      }
       bleScanMode = COLDSENSES_SCANMODE_SELECTED_SCAN;
     }
   }
